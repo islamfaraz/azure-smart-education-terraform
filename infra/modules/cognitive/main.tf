@@ -33,7 +33,7 @@ resource "azurerm_cognitive_account" "main" {
   custom_subdomain_name = "smartedu-${var.unique_suffix}"
 
   network_acls {
-    default_action = "Allow"
+    default_action = var.environment == "prod" ? "Deny" : "Allow"
   }
 
   tags = var.tags

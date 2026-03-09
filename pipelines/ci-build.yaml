@@ -134,11 +134,37 @@ stages:
                 echo "✅ PROD plan generated"
 
   # ──────────────────────────────────────────────
-  # Stage 2 — Build & Upload Artifact
+  # Stage 2 — Security Scanning (DevSecOps)
+  # ──────────────────────────────────────────────
+  - stage: SecurityScan
+    displayName: '🛡️ Security Scanning'
+    dependsOn: Validate
+    jobs:
+      - job: TFSecurityScan
+        displayName: 'Terraform Security Analysis'
+        steps:
+          - checkout: self
+            fetchDepth: 1
+
+          - script: |
+              pip install checkov
+              checkov --directory infra --framework terraform --output cli --soft-fail
+              echo "✅ Checkov Terraform security scan complete"
+            displayName: 'Run Checkov — IaC Security Scan'
+
+          - script: |
+              pip install detect-secrets
+              detect-secrets scan --all-files --exclude-files '\.git/.*' > .secrets-baseline.json
+              detect-secrets audit --report --json .secrets-baseline.json || true
+              echo "✅ Secret detection complete"
+            displayName: 'Detect Hardcoded Secrets'
+
+  # ──────────────────────────────────────────────
+  # Stage 3 — Build & Upload Artifact
   # ──────────────────────────────────────────────
   - stage: Build
     displayName: '📦 Build & Publish Artifact'
-    dependsOn: Validate
+    dependsOn: SecurityScan
     jobs:
       - job: BuildArtifact
         displayName: 'Package TF Config & Upload'

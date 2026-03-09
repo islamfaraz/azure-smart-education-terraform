@@ -33,12 +33,14 @@ module "cognitive_services" {
 }
 
 module "sql_database" {
-  source         = "./modules/sql"
-  resource_group = azurerm_resource_group.main
-  name_prefix    = local.name_prefix
-  unique_suffix  = local.unique_suffix
-  environment    = var.environment
-  tags           = local.default_tags
+  source                 = "./modules/sql"
+  resource_group         = azurerm_resource_group.main
+  name_prefix            = local.name_prefix
+  unique_suffix          = local.unique_suffix
+  environment            = var.environment
+  tags                   = local.default_tags
+  administrator_password = var.sql_admin_password
+  aad_admin_object_id    = var.aad_admin_object_id
 }
 
 module "app_service" {

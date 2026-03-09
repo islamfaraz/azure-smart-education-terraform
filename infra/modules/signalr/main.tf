@@ -37,7 +37,7 @@ resource "azurerm_signalr_service" "main" {
   messaging_logs_enabled    = true
 
   cors {
-    allowed_origins = ["*"]
+    allowed_origins = ["https://app.smarteducation.org"]
   }
 
   tags = var.tags

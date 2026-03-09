@@ -32,7 +32,7 @@ resource "azurerm_cdn_profile" "main" {
   name                = "cdn-${var.name_prefix}-${var.unique_suffix}"
   location            = "global"
   resource_group_name = var.resource_group.name
-  sku                 = var.environment == "prod" ? "Standard_Microsoft" : "Standard_Microsoft"
+  sku                 = var.environment == "prod" ? "Standard_Verizon" : "Standard_Microsoft"
 
   tags = var.tags
 }

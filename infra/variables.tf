@@ -28,3 +28,14 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "sql_admin_password" {
+  description = "SQL Server administrator password — set via TF_VAR or pipeline secret"
+  type        = string
+  sensitive   = true
+}
+
+variable "aad_admin_object_id" {
+  description = "Azure AD admin group object ID for SQL Server"
+  type        = string
+}

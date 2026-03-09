@@ -23,18 +23,29 @@ variable "tags" {
   type = map(string)
 }
 
+variable "administrator_password" {
+  type      = string
+  sensitive = true
+  description = "SQL Server administrator password — pass via pipeline variable or Key Vault"
+}
+
+variable "aad_admin_object_id" {
+  type        = string
+  description = "Azure AD admin group object ID for SQL Server"
+}
+
 resource "azurerm_mssql_server" "main" {
   name                         = "sql-${var.name_prefix}-${var.unique_suffix}"
   resource_group_name          = var.resource_group.name
   location                     = var.resource_group.location
   version                      = "12.0"
   administrator_login          = "sqladmin"
-  administrator_login_password = "P@ssw0rd!Change-Me-2026" # Replace with Key Vault reference in production
+  administrator_login_password = var.administrator_password
   minimum_tls_version          = "1.2"
 
   azuread_administrator {
     login_username = "AzureAD Admin"
-    object_id      = "00000000-0000-0000-0000-000000000000" # Replace with actual AAD group object ID
+    object_id      = var.aad_admin_object_id
   }
 
   tags = var.tags
