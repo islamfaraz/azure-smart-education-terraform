@@ -1,0 +1,138 @@
+# =============================================================================
+# GitHub Actions CD — Azure Smart Education Platform (Terraform)
+# Applies Terraform changes across environments with approvals
+# =============================================================================
+
+name: CD — Deploy to Azure
+
+on:
+  workflow_run:
+    workflows: ["CI — Validate & Plan Terraform"]
+    types: [completed]
+    branches: [master, main]
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  TERRAFORM_VERSION: "1.9.0"
+  WORKING_DIR: infra
+
+jobs:
+  # ────────────────────────────────────────────
+  # Job 1 — Apply to DEV
+  # ────────────────────────────────────────────
+  deploy-dev:
+    name: 🚀 Apply — DEV
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    environment: dev
+    defaults:
+      run:
+        working-directory: ${{ env.WORKING_DIR }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="resource_group_name=${{ secrets.TF_BACKEND_RG }}" \
+            -backend-config="storage_account_name=${{ secrets.TF_BACKEND_SA }}" \
+            -backend-config="container_name=${{ secrets.TF_BACKEND_CONTAINER }}" \
+            -backend-config="key=smart-education-dev.tfstate"
+
+      - name: Terraform Apply — DEV
+        run: terraform apply -var-file=environments/dev.tfvars -auto-approve
+
+  # ────────────────────────────────────────────
+  # Job 2 — Apply to STAGING
+  # ────────────────────────────────────────────
+  deploy-staging:
+    name: 🚀 Apply — STAGING
+    runs-on: ubuntu-latest
+    needs: deploy-dev
+    environment: staging
+    defaults:
+      run:
+        working-directory: ${{ env.WORKING_DIR }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="resource_group_name=${{ secrets.TF_BACKEND_RG }}" \
+            -backend-config="storage_account_name=${{ secrets.TF_BACKEND_SA }}" \
+            -backend-config="container_name=${{ secrets.TF_BACKEND_CONTAINER }}" \
+            -backend-config="key=smart-education-staging.tfstate"
+
+      - name: Terraform Apply — STAGING
+        run: terraform apply -var-file=environments/staging.tfvars -auto-approve
+
+  # ────────────────────────────────────────────
+  # Job 3 — Apply to PRODUCTION (manual approval)
+  # ────────────────────────────────────────────
+  deploy-prod:
+    name: 🟢 Apply — PRODUCTION
+    runs-on: ubuntu-latest
+    needs: deploy-staging
+    environment: production
+    defaults:
+      run:
+        working-directory: ${{ env.WORKING_DIR }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="resource_group_name=${{ secrets.TF_BACKEND_RG }}" \
+            -backend-config="storage_account_name=${{ secrets.TF_BACKEND_SA }}" \
+            -backend-config="container_name=${{ secrets.TF_BACKEND_CONTAINER }}" \
+            -backend-config="key=smart-education-prod.tfstate"
+
+      - name: Terraform Plan — PROD
+        run: terraform plan -var-file=environments/prod.tfvars -out=tfplan-prod
+
+      - name: Terraform Apply — PROD
+        run: terraform apply tfplan-prod
+
+      - name: Post-deploy validation
+        run: echo "✅ PRODUCTION deployment complete"

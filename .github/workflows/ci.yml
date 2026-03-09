@@ -1,0 +1,129 @@
+# =============================================================================
+# GitHub Actions CI — Azure Smart Education Platform (Terraform)
+# Validates, lints, scans, and plans Terraform infrastructure
+# =============================================================================
+
+name: CI — Validate & Plan Terraform
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "infra/**"
+      - ".github/workflows/ci.yml"
+  pull_request:
+    branches: [main, master]
+    paths:
+      - "infra/**"
+
+permissions:
+  contents: read
+  id-token: write  # OIDC for Azure login
+
+env:
+  TERRAFORM_VERSION: "1.9.0"
+  WORKING_DIR: infra
+
+jobs:
+  # ────────────────────────────────────────────
+  # Job 1 — Format & Validate
+  # ────────────────────────────────────────────
+  validate:
+    name: 🔍 Format & Validate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ env.WORKING_DIR }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive -diff
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="resource_group_name=${{ secrets.TF_BACKEND_RG }}" \
+            -backend-config="storage_account_name=${{ secrets.TF_BACKEND_SA }}" \
+            -backend-config="container_name=${{ secrets.TF_BACKEND_CONTAINER }}" \
+            -backend-config="key=smart-education-dev.tfstate"
+
+      - name: Terraform Validate
+        run: terraform validate
+
+  # ────────────────────────────────────────────
+  # Job 2 — Security Scan
+  # ────────────────────────────────────────────
+  security-scan:
+    name: 🛡️ Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Checkov
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: ${{ env.WORKING_DIR }}
+          framework: terraform
+          soft_fail: true
+          output_format: sarif
+
+      - name: Detect Secrets
+        uses: reviewdog/action-detect-secrets@v0.17
+        with:
+          fail_on_error: true
+
+  # ────────────────────────────────────────────
+  # Job 3 — Plan (DEV)
+  # ────────────────────────────────────────────
+  plan:
+    name: 📋 Terraform Plan — DEV
+    runs-on: ubuntu-latest
+    needs: [validate, security-scan]
+    defaults:
+      run:
+        working-directory: ${{ env.WORKING_DIR }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="resource_group_name=${{ secrets.TF_BACKEND_RG }}" \
+            -backend-config="storage_account_name=${{ secrets.TF_BACKEND_SA }}" \
+            -backend-config="container_name=${{ secrets.TF_BACKEND_CONTAINER }}" \
+            -backend-config="key=smart-education-dev.tfstate"
+
+      - name: Terraform Plan
+        run: terraform plan -var-file=environments/dev.tfvars -out=tfplan-dev
+
+      - name: Upload Plan Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-dev-${{ github.run_number }}
+          path: ${{ env.WORKING_DIR }}/tfplan-dev
+          retention-days: 5
