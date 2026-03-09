@@ -1,0 +1,195 @@
+# =============================================================================
+# CI Pipeline — Azure Smart Education Hub (Terraform)
+# Validates TF configs, creates plan, uploads artifact to Azure Storage
+# TF State stored on Azure Storage Account
+# =============================================================================
+
+trigger:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - infra/**
+
+pr:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - infra/**
+
+variables:
+  - name: azureServiceConnection
+    value: 'AzureServiceConnection'
+  - name: artifactStorageAccount
+    value: 'stterraformeduartifacts'
+  - name: artifactContainer
+    value: 'tf-artifacts'
+  - name: tfStateStorageAccount
+    value: 'stterraformstate'
+  - name: tfStateContainer
+    value: 'tfstate'
+  - name: tfStateKey
+    value: 'smart-education-hub.tfstate'
+  - name: terraformVersion
+    value: '1.7.0'
+  - name: buildVersion
+    value: '$(Build.BuildNumber)'
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+stages:
+  # ──────────────────────────────────────────────
+  # Stage 1 — Validate Terraform Configuration
+  # ──────────────────────────────────────────────
+  - stage: Validate
+    displayName: '🔍 Validate Terraform'
+    jobs:
+      - job: ValidateTF
+        displayName: 'Format, Init, Validate & Plan'
+        steps:
+          - checkout: self
+            fetchDepth: 1
+
+          - task: TerraformInstaller@1
+            displayName: 'Install Terraform $(terraformVersion)'
+            inputs:
+              terraformVersion: $(terraformVersion)
+
+          - script: |
+              cd infra
+              terraform fmt -check -recursive
+              echo "✅ Terraform format check passed"
+            displayName: 'Format Check'
+
+          - task: AzureCLI@2
+            displayName: 'Terraform Init'
+            inputs:
+              azureSubscription: $(azureServiceConnection)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                cd infra
+                terraform init \
+                  -backend-config="resource_group_name=rg-terraform-state" \
+                  -backend-config="storage_account_name=$(tfStateStorageAccount)" \
+                  -backend-config="container_name=$(tfStateContainer)" \
+                  -backend-config="key=$(tfStateKey)"
+                echo "✅ Terraform initialized"
+
+          - task: AzureCLI@2
+            displayName: 'Terraform Validate'
+            inputs:
+              azureSubscription: $(azureServiceConnection)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                cd infra
+                terraform validate
+                echo "✅ Terraform validation passed"
+
+          - task: AzureCLI@2
+            displayName: 'Terraform Plan — DEV'
+            inputs:
+              azureSubscription: $(azureServiceConnection)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                cd infra
+                terraform plan \
+                  -var-file="environments/dev.tfvars" \
+                  -out="$(Build.ArtifactStagingDirectory)/dev.tfplan" \
+                  -input=false
+                echo "✅ DEV plan generated"
+
+          - task: AzureCLI@2
+            displayName: 'Terraform Plan — STAGING'
+            inputs:
+              azureSubscription: $(azureServiceConnection)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                cd infra
+                terraform plan \
+                  -var-file="environments/staging.tfvars" \
+                  -out="$(Build.ArtifactStagingDirectory)/staging.tfplan" \
+                  -input=false
+                echo "✅ STAGING plan generated"
+
+          - task: AzureCLI@2
+            displayName: 'Terraform Plan — PROD'
+            inputs:
+              azureSubscription: $(azureServiceConnection)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                cd infra
+                terraform plan \
+                  -var-file="environments/prod.tfvars" \
+                  -out="$(Build.ArtifactStagingDirectory)/prod.tfplan" \
+                  -input=false
+                echo "✅ PROD plan generated"
+
+  # ──────────────────────────────────────────────
+  # Stage 2 — Build & Upload Artifact
+  # ──────────────────────────────────────────────
+  - stage: Build
+    displayName: '📦 Build & Publish Artifact'
+    dependsOn: Validate
+    jobs:
+      - job: BuildArtifact
+        displayName: 'Package TF Config & Upload'
+        steps:
+          - checkout: self
+            fetchDepth: 1
+
+          - script: |
+              mkdir -p $(Build.ArtifactStagingDirectory)/terraform
+              cp -r infra/* $(Build.ArtifactStagingDirectory)/terraform/
+
+              cat > $(Build.ArtifactStagingDirectory)/manifest.json << EOF
+              {
+                "project": "azure-smart-education-hub",
+                "iac": "terraform",
+                "version": "$(buildVersion)",
+                "buildId": "$(Build.BuildId)",
+                "sourceCommit": "$(Build.SourceVersion)",
+                "sourceBranch": "$(Build.SourceBranchName)",
+                "buildDate": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+                "tfStateBackend": {
+                  "storageAccount": "$(tfStateStorageAccount)",
+                  "container": "$(tfStateContainer)",
+                  "key": "$(tfStateKey)"
+                }
+              }
+              EOF
+              echo "✅ Artifact packaged with manifest"
+            displayName: 'Package Terraform Config'
+
+          - task: PublishPipelineArtifact@1
+            displayName: 'Publish Pipeline Artifact'
+            inputs:
+              targetPath: $(Build.ArtifactStagingDirectory)
+              artifactName: 'tf-infra-$(buildVersion)'
+
+          - task: AzureCLI@2
+            displayName: 'Upload Versioned Artifact to Azure Storage'
+            inputs:
+              azureSubscription: $(azureServiceConnection)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                ARTIFACT_PATH="artifacts/smart-education/$(buildVersion)"
+
+                az storage blob upload-batch \
+                  --account-name $(artifactStorageAccount) \
+                  --destination $(artifactContainer) \
+                  --destination-path "$ARTIFACT_PATH" \
+                  --source $(Build.ArtifactStagingDirectory) \
+                  --auth-mode login \
+                  --overwrite
+
+                echo "✅ Artifact uploaded to: $(artifactContainer)/$ARTIFACT_PATH"

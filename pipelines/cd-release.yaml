@@ -1,0 +1,202 @@
+# =============================================================================
+# CD Release Pipeline — Azure Smart Education Hub (Terraform)
+# Downloads artifact from Storage, runs terraform apply per environment
+# State file stored on Azure Storage Account
+# =============================================================================
+
+trigger: none
+
+resources:
+  pipelines:
+    - pipeline: ciBuild
+      source: 'smart-education-ci'
+      trigger:
+        branches:
+          include:
+            - main
+
+variables:
+  - name: azureServiceConnection
+    value: 'AzureServiceConnection'
+  - name: artifactStorageAccount
+    value: 'stterraformeduartifacts'
+  - name: artifactContainer
+    value: 'tf-artifacts'
+  - name: tfStateStorageAccount
+    value: 'stterraformstate'
+  - name: tfStateContainer
+    value: 'tfstate'
+  - name: tfStateKey
+    value: 'smart-education-hub.tfstate'
+  - name: terraformVersion
+    value: '1.7.0'
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+stages:
+  # ──────────────────────────────────────────────
+  # Stage 1 — Deploy to DEV
+  # ──────────────────────────────────────────────
+  - stage: DeployDev
+    displayName: '🚀 Deploy to DEV'
+    jobs:
+      - deployment: TerraformApply
+        displayName: 'Terraform Apply — DEV'
+        environment: 'smart-education-dev'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: TerraformInstaller@1
+                  displayName: 'Install Terraform'
+                  inputs:
+                    terraformVersion: $(terraformVersion)
+
+                - task: AzureCLI@2
+                  displayName: 'Download Artifact & Apply — DEV'
+                  inputs:
+                    azureSubscription: $(azureServiceConnection)
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    inlineScript: |
+                      BUILD_VERSION=$(resources.pipeline.ciBuild.runName)
+                      ARTIFACT_PATH="artifacts/smart-education/$BUILD_VERSION"
+
+                      echo "📥 Downloading artifact..."
+                      mkdir -p $(Agent.TempDirectory)/tf-artifact
+                      az storage blob download-batch \
+                        --account-name $(artifactStorageAccount) \
+                        --source $(artifactContainer) \
+                        --destination $(Agent.TempDirectory)/tf-artifact \
+                        --pattern "$ARTIFACT_PATH/*" \
+                        --auth-mode login
+
+                      TF_DIR="$(Agent.TempDirectory)/tf-artifact/$ARTIFACT_PATH/terraform"
+                      cd "$TF_DIR"
+
+                      echo "🔧 Terraform Init..."
+                      terraform init \
+                        -backend-config="resource_group_name=rg-terraform-state" \
+                        -backend-config="storage_account_name=$(tfStateStorageAccount)" \
+                        -backend-config="container_name=$(tfStateContainer)" \
+                        -backend-config="key=smart-education-dev.tfstate"
+
+                      echo "🚀 Terraform Apply — DEV..."
+                      terraform apply \
+                        -var-file="environments/dev.tfvars" \
+                        -auto-approve \
+                        -input=false
+
+                      echo "✅ DEV deployment complete"
+                      terraform output -json > $(Agent.TempDirectory)/dev-outputs.json
+
+  # ──────────────────────────────────────────────
+  # Stage 2 — Deploy to STAGING
+  # ──────────────────────────────────────────────
+  - stage: DeployStaging
+    displayName: '🟡 Deploy to STAGING'
+    dependsOn: DeployDev
+    jobs:
+      - deployment: TerraformApply
+        displayName: 'Terraform Apply — STAGING'
+        environment: 'smart-education-staging'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: TerraformInstaller@1
+                  inputs:
+                    terraformVersion: $(terraformVersion)
+
+                - task: AzureCLI@2
+                  displayName: 'Download Artifact & Apply — STAGING'
+                  inputs:
+                    azureSubscription: $(azureServiceConnection)
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    inlineScript: |
+                      BUILD_VERSION=$(resources.pipeline.ciBuild.runName)
+                      ARTIFACT_PATH="artifacts/smart-education/$BUILD_VERSION"
+
+                      mkdir -p $(Agent.TempDirectory)/tf-artifact
+                      az storage blob download-batch \
+                        --account-name $(artifactStorageAccount) \
+                        --source $(artifactContainer) \
+                        --destination $(Agent.TempDirectory)/tf-artifact \
+                        --pattern "$ARTIFACT_PATH/*" \
+                        --auth-mode login
+
+                      TF_DIR="$(Agent.TempDirectory)/tf-artifact/$ARTIFACT_PATH/terraform"
+                      cd "$TF_DIR"
+
+                      terraform init \
+                        -backend-config="resource_group_name=rg-terraform-state" \
+                        -backend-config="storage_account_name=$(tfStateStorageAccount)" \
+                        -backend-config="container_name=$(tfStateContainer)" \
+                        -backend-config="key=smart-education-staging.tfstate"
+
+                      terraform apply \
+                        -var-file="environments/staging.tfvars" \
+                        -auto-approve \
+                        -input=false
+
+                      echo "✅ STAGING deployment complete"
+
+  # ──────────────────────────────────────────────
+  # Stage 3 — Deploy to PRODUCTION (Manual Approval)
+  # ──────────────────────────────────────────────
+  - stage: DeployProd
+    displayName: '🟢 Deploy to PRODUCTION'
+    dependsOn: DeployStaging
+    jobs:
+      - deployment: TerraformApply
+        displayName: 'Terraform Apply — PROD'
+        environment: 'smart-education-prod'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: TerraformInstaller@1
+                  inputs:
+                    terraformVersion: $(terraformVersion)
+
+                - task: AzureCLI@2
+                  displayName: 'Download Artifact & Apply — PROD'
+                  inputs:
+                    azureSubscription: $(azureServiceConnection)
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    inlineScript: |
+                      BUILD_VERSION=$(resources.pipeline.ciBuild.runName)
+                      ARTIFACT_PATH="artifacts/smart-education/$BUILD_VERSION"
+
+                      mkdir -p $(Agent.TempDirectory)/tf-artifact
+                      az storage blob download-batch \
+                        --account-name $(artifactStorageAccount) \
+                        --source $(artifactContainer) \
+                        --destination $(Agent.TempDirectory)/tf-artifact \
+                        --pattern "$ARTIFACT_PATH/*" \
+                        --auth-mode login
+
+                      TF_DIR="$(Agent.TempDirectory)/tf-artifact/$ARTIFACT_PATH/terraform"
+                      cd "$TF_DIR"
+
+                      terraform init \
+                        -backend-config="resource_group_name=rg-terraform-state" \
+                        -backend-config="storage_account_name=$(tfStateStorageAccount)" \
+                        -backend-config="container_name=$(tfStateContainer)" \
+                        -backend-config="key=smart-education-prod.tfstate"
+
+                      terraform plan \
+                        -var-file="environments/prod.tfvars" \
+                        -input=false \
+                        -out=prod.tfplan
+
+                      terraform apply \
+                        -auto-approve \
+                        -input=false \
+                        prod.tfplan
+
+                      echo "✅ PRODUCTION deployment complete"
+                      terraform output -json
